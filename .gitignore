@@ -1,0 +1,4 @@
+porto/
+.venv/
+__pycache__/
+*.pyc
