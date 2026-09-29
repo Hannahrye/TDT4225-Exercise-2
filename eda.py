@@ -3,12 +3,8 @@
 TDT4225 - Assignment 2
 Exploratory Data Analysis: Porto Taxi Trajectory Dataset
 
-Run:
-    python eda.py
-
 Outputs are saved in the eda_results directory.
 
-The original dataset is never modified.
 """
 
 from pathlib import Path
@@ -169,7 +165,7 @@ print("\nDuplicate TRIP_ID:")
 print(df["TRIP_ID"].duplicated().sum())
 
 print("\nCompletely duplicated rows:")
-print(df.duplicated(subset=["TRIP_ID"]).sum())
+print(df.duplicated().sum())
 
 print("\nUnique taxis:")
 print(df["TAXI_ID"].nunique())
@@ -772,6 +768,32 @@ plt.savefig(
 )
 plt.close()
 
+# ---------------------------------------------------------
+# MISSING_DATA vs number of GPS points
+# ---------------------------------------------------------
+
+# Group trips by number of GPS points
+df["GPS_POINT_GROUP"] = pd.cut(
+    df["NUM_POINTS"],
+    bins=[-1, 0, 1, 2, float("inf")],
+    labels=["0", "1", "2", "3 or more"]
+)
+
+# Compare GPS point groups with MISSING_DATA
+missing_vs_gps = pd.crosstab(
+    df["GPS_POINT_GROUP"],
+    df["MISSING_DATA"]
+)
+
+print("\nMISSING_DATA vs number of GPS points:")
+print(missing_vs_gps)
+
+# Specifically check trips with fewer than 3 GPS points
+few_points = df[df["NUM_POINTS"] < 3]
+
+print("\nTrips with fewer than 3 GPS points:")
+print(f"Total: {len(few_points)}")
+print(few_points["MISSING_DATA"].value_counts())
 
 # Trip duration distribution
 plt.figure(figsize=(8, 4))
@@ -791,6 +813,7 @@ plt.savefig(
     dpi=200
 )
 plt.close()
+
 
 
 # Monthly trips
