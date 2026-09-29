@@ -1,4 +1,12 @@
+# Dataset
 porto/
+
+# Python environment
 .venv/
 __pycache__/
 *.pyc
+
+# Generated EDA data files
+eda_results/*.csv
+eda_results/*.json
+eda_results/pre_sql_checks/
