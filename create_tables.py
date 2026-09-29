@@ -1,17 +1,9 @@
-
 from DbConnector import DbConnector
 from tabulate import tabulate
 
 
-class CreateTables:
-
-    def __init__(self):
-        self.connection = DbConnector()
-        self.db_connection = self.connection.db_connection
-        self.cursor = self.connection.cursor
-
-    def create_trip_table(self):
-        query = """
+def create_trip_table(cursor):
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS Trip (
             trip_record_id BIGINT AUTO_INCREMENT PRIMARY KEY,
             trip_id VARCHAR(25) NOT NULL,
@@ -29,14 +21,11 @@ class CreateTables:
             INDEX idx_taxi_start (taxi_id, start_timestamp),
             INDEX idx_call_type (call_type)
         ) ENGINE = InnoDB
-        """
+    """)
 
-        self.cursor.execute(query)
-        self.db_connection.commit()
-        print("Trip table created.")
 
-    def create_gps_table(self):
-        query = """
+def create_gps_table(cursor):
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS GPSPoint (
             trip_record_id BIGINT NOT NULL,
             point_index INT NOT NULL,
@@ -48,37 +37,23 @@ class CreateTables:
             FOREIGN KEY (trip_record_id)
                 REFERENCES Trip(trip_record_id)
         ) ENGINE = InnoDB
-        """
-
-        self.cursor.execute(query)
-        self.db_connection.commit()
-        print("GPSPoint table created.")
-
-    def show_tables(self):
-        self.cursor.execute("SHOW TABLES")
-        rows = self.cursor.fetchall()
-        print(tabulate(rows, headers=self.cursor.column_names))
+    """)
 
 
 def main():
-    program = None
+    connection = DbConnector()
+    cursor = connection.cursor
 
     try:
-        program = CreateTables()
+        # Trip must exist before GPSPoint because of the foreign key.
+        create_trip_table(cursor)
+        create_gps_table(cursor)
 
-        # Create Trip first because GPSPoint refers to it.
-        program.create_trip_table()
-        program.create_gps_table()
-
-        # Verify that the tables exist.
-        program.show_tables()
-
-    except Exception as e:
-        print("ERROR:", e)
+        cursor.execute("SHOW TABLES")
+        print(tabulate(cursor.fetchall(), headers=cursor.column_names))
 
     finally:
-        if program:
-            program.connection.close_connection()
+        connection.close_connection()
 
 
 if __name__ == "__main__":
