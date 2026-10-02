@@ -39,6 +39,16 @@ def create_gps_table(cursor):
         ) ENGINE = InnoDB
     """)
 
+def create_distance_table(cursor):
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS TripDistance (
+            trip_record_id BIGINT PRIMARY KEY,
+            distance_km DOUBLE NOT NULL,
+
+            FOREIGN KEY (trip_record_id)
+                REFERENCES Trip(trip_record_id)
+        ) ENGINE = InnoDB
+    """)
 
 def main():
     connection = DbConnector()
@@ -48,6 +58,7 @@ def main():
         # Trip must exist before GPSPoint because of the foreign key.
         create_trip_table(cursor)
         create_gps_table(cursor)
+        create_distance_table(cursor)
 
         cursor.execute("SHOW TABLES")
         print(tabulate(cursor.fetchall(), headers=cursor.column_names))

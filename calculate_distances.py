@@ -1,8 +1,18 @@
 import time
+from haversine import haversine
 from DbConnector import DbConnector
 
 
 BATCH_SIZE = 5000
+
+
+def trip_distance_km(points):
+    """Sum of Haversine distances between consecutive (lat, lon) points.
+    Trips with 0 or 1 point get distance 0."""
+    return sum(
+        haversine(points[i], points[i + 1])
+        for i in range(len(points) - 1)
+    )
 
 
 def main():
@@ -11,15 +21,6 @@ def main():
     db = connection.db_connection
 
     try:
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS TripDistance (
-                trip_record_id BIGINT PRIMARY KEY,
-                distance_km DOUBLE NOT NULL,
-                FOREIGN KEY (trip_record_id)
-                    REFERENCES Trip(trip_record_id)
-            ) ENGINE = InnoDB
-        """)
-
         # Resume after the last completed batch.
         # Assumes previous results are complete and GPS data is unchanged.
         cursor.execute("""
@@ -45,47 +46,38 @@ def main():
                 LIMIT %s
             """, (last_id, BATCH_SIZE))
 
-            rows = cursor.fetchall()
-            if not rows:
+            record_ids = [row[0] for row in cursor.fetchall()]
+            if not record_ids:
                 break
 
-            batch_end = rows[-1][0]
+            batch_end = record_ids[-1]
 
-            # Sum Haversine distances between consecutive GPS points.
-            # Trips with 0 or 1 point receive an estimated distance of 0.
+            # Fetch all GPS points in the batch, in the original order.
             cursor.execute("""
+                SELECT trip_record_id, latitude, longitude
+                FROM GPSPoint
+                WHERE trip_record_id > %s
+                  AND trip_record_id <= %s
+                ORDER BY trip_record_id, point_index
+            """, (last_id, batch_end))
+
+            # Group the points per trip. Trips without points keep
+            # an empty list and get distance 0.
+            points_per_trip = {record_id: [] for record_id in record_ids}
+            for record_id, lat, lon in cursor.fetchall():
+                points_per_trip[record_id].append((lat, lon))
+
+            rows = [
+                (record_id, trip_distance_km(points))
+                for record_id, points in points_per_trip.items()
+            ]
+
+            cursor.executemany("""
                 INSERT INTO TripDistance (trip_record_id, distance_km)
-                SELECT
-                    t.trip_record_id,
-                    COALESCE(
-                        SUM(
-                            2 * 6371 * ASIN(
-                                LEAST(1, SQRT(
-                                    POW(SIN(RADIANS(
-                                        p2.latitude - p1.latitude
-                                    ) / 2), 2)
-                                    + COS(RADIANS(p1.latitude))
-                                    * COS(RADIANS(p2.latitude))
-                                    * POW(SIN(RADIANS(
-                                        p2.longitude - p1.longitude
-                                    ) / 2), 2)
-                                ))
-                            )
-                        ),
-                        0
-                    ) AS distance_km
-                FROM Trip t
-                LEFT JOIN GPSPoint p1
-                    ON t.trip_record_id = p1.trip_record_id
-                LEFT JOIN GPSPoint p2
-                    ON p1.trip_record_id = p2.trip_record_id
-                    AND p2.point_index = p1.point_index + 1
-                WHERE t.trip_record_id > %s
-                  AND t.trip_record_id <= %s
-                GROUP BY t.trip_record_id
+                VALUES (%s, %s)
                 ON DUPLICATE KEY UPDATE
                     distance_km = VALUES(distance_km)
-            """, (last_id, batch_end))
+            """, rows)
 
             db.commit()
             last_id = batch_end
