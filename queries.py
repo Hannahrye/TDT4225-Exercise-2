@@ -1,5 +1,6 @@
 from DbConnector import DbConnector
 from tabulate import tabulate
+from haversine import haversine, Unit
 
 
 def run_query(cursor, title, query):
@@ -22,7 +23,7 @@ def main():
             SELECT
                 COUNT(DISTINCT taxi_id) AS total_taxis,
                 COUNT(*) AS total_trips,
-                SUM(num_points) AS total_gps_points
+                CAST(SUM(num_points) AS UNSIGNED) AS total_gps_points
             FROM Trip
         """)
 
@@ -131,6 +132,123 @@ def main():
             GROUP BY call_type
             ORDER BY call_type
         """)
+
+        # 5. Taxies with most total hours and distance driven, sorted by hours
+        run_query(cursor, "QUESTION 5", """
+            SELECT
+                t.taxi_id,
+                COUNT(*) AS number_of_trips,
+                ROUND(
+                    SUM(GREATEST(t.num_points - 1, 0)) * 15 / 3600, 2
+                ) AS total_hours,
+                ROUND(SUM(d.distance_km), 2) AS total_distance_km
+            FROM Trip t
+            JOIN TripDistance d
+                ON t.trip_record_id = d.trip_record_id
+            GROUP BY t.taxi_id
+            ORDER BY total_hours DESC
+        """)
+
+        # TODO må lese over denne!
+        # 6. Trips that passed within 100 m of Porto City Hall.
+        # The bounding box removes points that are clearly too far away
+        # before the Haversine distance is calculated.
+        run_query(cursor, "QUESTION 6", """
+            SELECT
+                t.trip_record_id,
+                t.trip_id,
+                t.taxi_id,
+                ROUND(MIN(p.dist_m), 1) AS closest_distance_m,
+                COUNT(*) OVER () AS total_trips_found
+            FROM (
+                SELECT
+                    trip_record_id,
+                    2 * 6371000 * ASIN(SQRT(
+                        POW(SIN(RADIANS(latitude - 41.15794) / 2), 2)
+                        + COS(RADIANS(41.15794)) * COS(RADIANS(latitude))
+                        * POW(SIN(RADIANS(longitude + 8.62911) / 2), 2)
+                    )) AS dist_m
+                FROM GPSPoint
+            ) AS p
+            JOIN Trip t
+                ON t.trip_record_id = p.trip_record_id
+            WHERE p.dist_m <= 100
+            GROUP BY t.trip_record_id, t.trip_id, t.taxi_id
+            ORDER BY t.trip_record_id
+            LIMIT 10
+        """)
+
+        # 7. Number of invalid trips
+        run_query(cursor, "QUESTION 7", """
+            SELECT 
+                COUNT(*) AS invalid_trips
+            FROM Trip 
+            WHERE num_points < 3
+        """)
+
+        # 8. Trips that cross midnight
+        run_query(cursor, "QUESTION 8", """
+            WITH trip_times AS (
+                SELECT
+                    trip_record_id,
+                    trip_id,
+                    taxi_id,
+                    CONVERT_TZ(
+                        FROM_UNIXTIME(start_timestamp),
+                        '+00:00', 'Europe/Lisbon'
+                    ) AS start_local,
+                    CONVERT_TZ(
+                        FROM_UNIXTIME(
+                            start_timestamp
+                            + GREATEST(num_points - 1, 0) * 15
+                        ),
+                        '+00:00', 'Europe/Lisbon'
+                    ) AS end_local
+                FROM Trip
+            )
+            SELECT
+                trip_record_id,
+                trip_id,
+                taxi_id,
+                start_local,
+                end_local,
+                COUNT(*) OVER () AS total_midnight_crossers
+            FROM trip_times
+            WHERE DATE(end_local) > DATE(start_local)
+            ORDER BY start_local
+            LIMIT 20
+        """)
+        
+        
+        # 9. Circular trips: starts and ends within 50 m of each other.
+        cursor.execute("""
+            SELECT
+                t.trip_record_id, t.trip_id, t.taxi_id, t.num_points,
+                s.latitude, s.longitude, e.latitude, e.longitude
+            FROM Trip t
+            JOIN GPSPoint s
+                ON s.trip_record_id = t.trip_record_id AND s.point_index = 0
+            JOIN GPSPoint e
+                ON e.trip_record_id = t.trip_record_id
+                AND e.point_index = t.num_points - 1
+            WHERE t.num_points >= 3
+        """)
+        circular = []
+        for rid, tid, taxi, n, slat, slon, elat, elon in cursor.fetchall():
+            dist = haversine((slat, slon), (elat, elon), unit=Unit.METERS)
+            if dist <= 50:
+                circular.append((rid, tid, taxi, n, round(dist, 1)))
+
+        print("\nQUESTION 9")
+        print(f"Circular trips: {len(circular):,}")
+        print(tabulate(
+            circular[:20],
+            headers=["trip_record_id", "trip_id", "taxi_id",
+                     "num_points", "start_end_distance_m"],
+            tablefmt="grid"
+        ))
+
+
 
     finally:
         connection.close_connection()
