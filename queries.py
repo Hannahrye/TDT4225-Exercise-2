@@ -12,6 +12,11 @@ def run_query(cursor, title, query):
         tablefmt="grid"
     ))
 
+def print_table(title, rows, headers, summary=None):
+    print(f"\n{title}")
+    if summary:
+        print(summary)
+    print(tabulate(rows, headers=headers, tablefmt="grid"))
 
 def main():
     connection = DbConnector()
@@ -149,34 +154,31 @@ def main():
             ORDER BY total_hours DESC
         """)
 
-        # TODO må lese over denne!
         # 6. Trips that passed within 100 m of Porto City Hall.
-        # The bounding box removes points that are clearly too far away
-        # before the Haversine distance is calculated.
-        run_query(cursor, "QUESTION 6", """
-            SELECT
-                t.trip_record_id,
-                t.trip_id,
-                t.taxi_id,
-                ROUND(MIN(p.dist_m), 1) AS closest_distance_m,
-                COUNT(*) OVER () AS total_trips_found
-            FROM (
-                SELECT
-                    trip_record_id,
-                    2 * 6371000 * ASIN(SQRT(
-                        POW(SIN(RADIANS(latitude - 41.15794) / 2), 2)
-                        + COS(RADIANS(41.15794)) * COS(RADIANS(latitude))
-                        * POW(SIN(RADIANS(longitude + 8.62911) / 2), 2)
-                    )) AS dist_m
-                FROM GPSPoint
-            ) AS p
-            JOIN Trip t
-                ON t.trip_record_id = p.trip_record_id
-            WHERE p.dist_m <= 100
-            GROUP BY t.trip_record_id, t.trip_id, t.taxi_id
-            ORDER BY t.trip_record_id
-            LIMIT 10
+        city_hall = (41.15794, -8.62911)  # (latitude, longitude)
+
+        # Fetch only the GPS points in a small box around the City Hall
+        # (about 110 m in each direction).
+        cursor.execute("""
+            SELECT trip_record_id, latitude, longitude
+            FROM GPSPoint
+            WHERE latitude  BETWEEN 41.15694 AND 41.15894
+              AND longitude BETWEEN -8.63051 AND -8.62771
         """)
+
+        # Keep the trips with at least one point within 100 m.
+        trips_near_city_hall = set()
+        for trip_record_id, latitude, longitude in cursor.fetchall():
+            distance = haversine(city_hall, (latitude, longitude), unit=Unit.METERS)
+            if distance <= 100:
+                trips_near_city_hall.add(trip_record_id)
+
+        print_table(
+            "QUESTION 6",
+            [(trip,) for trip in sorted(trips_near_city_hall)[:10]],
+            ["trip_record_id"],
+            f"Trips within 100 m of Porto City Hall: {len(trips_near_city_hall):,} "
+        )
 
         # 7. Number of invalid trips
         run_query(cursor, "QUESTION 7", """
@@ -247,6 +249,38 @@ def main():
                      "num_points", "start_end_distance_m"],
             tablefmt="grid"
         ))
+
+        # 10. Average idle time between consecutive trips per taxi, top 20.
+        run_query(cursor, "QUESTION 10", """
+            WITH trip_times AS (
+                SELECT
+                    taxi_id,
+                    start_timestamp,
+                    start_timestamp + GREATEST(num_points - 1, 0) * 15
+                        AS end_timestamp
+                FROM Trip
+            ),
+            gaps AS (
+                SELECT
+                    taxi_id,
+                    start_timestamp,
+                    LAG(end_timestamp) OVER (
+                        PARTITION BY taxi_id ORDER BY start_timestamp
+                    ) AS prev_end_timestamp
+                FROM trip_times
+            )
+            SELECT
+                taxi_id,
+                ROUND(AVG(start_timestamp - prev_end_timestamp) / 3600, 2)
+                    AS avg_idle_hours,
+                COUNT(*) AS number_of_gaps
+            FROM gaps
+            WHERE prev_end_timestamp IS NOT NULL
+              AND start_timestamp >= prev_end_timestamp
+            GROUP BY taxi_id
+            ORDER BY avg_idle_hours DESC
+            LIMIT 20
+        """)
 
 
 
